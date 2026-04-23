@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Remark / Prettier Markdown Playground</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #1e1e2e; color: #cdd6f4; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 12px 20px; background: #181825; border-bottom: 1px solid #313244; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 16px; font-weight: 600; color: #89b4fa; }
+  header span { font-size: 12px; color: #6c7086; }
+  #permalink { background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 4px 12px; font-size: 12px; cursor: pointer; margin-left: auto; font-family: inherit; }
+  #permalink:hover { background: #45475a; }
+  #permalink.copied { background: #a6e3a1; color: #1e1e2e; border-color: #a6e3a1; }
+  .container { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; flex: 1; gap: 1px; background: #313244; }
+  .panel { background: #1e1e2e; display: flex; flex-direction: column; overflow: hidden; }
+  .panel-header { padding: 8px 16px; background: #181825; font-size: 12px; font-weight: 600; color: #a6adc8; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #313244; }
+  .panel-body { flex: 1; overflow: auto; padding: 12px 16px; }
+  #input { width: 100%; height: 100%; background: transparent; border: none; color: #cdd6f4; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 14px; line-height: 1.6; resize: none; outline: none; }
+  #input::placeholder { color: #585b70; }
+  pre { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  #ast .node-type { color: #f38ba8; }
+  #ast .node-text { color: #a6e3a1; }
+  #ast .node-pos { color: #585b70; }
+  #formatted { color: #cdd6f4; }
+  #html { color: #cdd6f4; }
+  #html code { background: #313244; padding: 2px 6px; border-radius: 3px; }
+  .loading { color: #585b70; font-style: italic; }
+  .error { color: #f38ba8; }
+  .input-panel { grid-row: 1 / 3; }
+  @media (max-width: 768px) {
+    .container { grid-template-columns: 1fr; grid-template-rows: auto 1fr 1fr 1fr; }
+    .input-panel { grid-row: auto; min-height: 120px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Remark + Prettier Playground</h1>
+  <span>Type markdown on the left</span>
+  <button id="permalink">Permalink</button>
+</header>
+
+<div class="container">
+  <div class="panel input-panel">
+    <div class="panel-header">Input</div>
+    <div class="panel-body">
+      <textarea id="input" placeholder="Type markdown here..." spellcheck="false">*foo bar*</textarea>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">Remark AST</div>
+    <div class="panel-body">
+      <pre id="ast"><span class="loading">Loading prettier...</span></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">Prettier Output / HTML</div>
+    <div class="panel-body">
+      <pre id="formatted"></pre>
+      <hr style="border: none; border-top: 1px solid #313244; margin: 12px 0;">
+      <div id="html"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as prettier from "https://unpkg.com/prettier@3.8.1/standalone.mjs";
+import markdownPlugin from "https://unpkg.com/prettier@3.8.1/plugins/markdown.mjs";
+
+const inputEl = document.getElementById("input");
+const astEl = document.getElementById("ast");
+const formattedEl = document.getElementById("formatted");
+const htmlEl = document.getElementById("html");
+
+let debounceTimer;
+
+async function update() {
+  const source = inputEl.value + "\n";
+
+  try {
+    // Parse AST
+    const { ast } = await prettier.__debug.parse(source, {
+      filepath: "test.md",
+      plugins: [markdownPlugin],
+    });
+
+    // Format
+    const output = await prettier.format(source, {
+      filepath: "test.md",
+      plugins: [markdownPlugin],
+    });
+
+    // Render AST
+    astEl.innerHTML = renderNode(ast.children[0], 0);
+
+    // Render formatted output
+    formattedEl.textContent = output.trimEnd();
+
+    // Render HTML preview
+    htmlEl.innerHTML =
+      '<div style="color: #6c7086; font-size: 12px; margin-bottom: 8px; font-family: sans-serif;">HTML Preview</div>' +
+      '<div style="background: #181825; padding: 12px; border-radius: 6px; color: #cdd6f4; font-family: sans-serif; font-size: 14px; line-height: 1.6;">' +
+      mdToHtml(output) +
+      "</div>";
+  } catch (e) {
+    astEl.innerHTML = `<span class="error">Error: ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+function renderNode(node, depth) {
+  if (!node) return "";
+  const indent = "  ".repeat(depth);
+  let out = "";
+
+  if (node.type === "text") {
+    out += `${indent}<span class="node-text">text</span> ${escapeHtml(JSON.stringify(node.value))}\n`;
+  } else {
+    const pos = node.position
+      ? ` <span class="node-pos">[${node.position.start.offset}..${node.position.end.offset}]</span>`
+      : "";
+    out += `${indent}<span class="node-type">${escapeHtml(node.type)}</span>${pos}\n`;
+
+    if (node.children) {
+      for (const child of node.children) {
+        out += renderNode(child, depth + 1);
+      }
+    }
+    if (node.value !== undefined && node.type !== "text") {
+      out += `${indent}  <span class="node-text">value: ${escapeHtml(JSON.stringify(node.value))}</span>\n`;
+    }
+  }
+  return out;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Minimal markdown to HTML for preview
+function mdToHtml(md) {
+  return md
+    .split("\n\n")
+    .map((block) => {
+      let html = block
+        .replace(/\\\*/g, "&#42;")
+        .replace(/\\_/g, "&#95;")
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/__(.+?)__/g, "<strong>$1</strong>")
+        .replace(/\*(.+?)\*/g, "<em>$1</em>")
+        .replace(/_(.+?)_/g, "<em>$1</em>")
+        .replace(/`(.+?)`/g, "<code>$1</code>")
+        .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" style="color:#89b4fa">$1</a>');
+      return `<p>${html}</p>`;
+    })
+    .join("");
+}
+
+inputEl.addEventListener("input", () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(update, 200);
+});
+
+// Permalink: encode input in URL hash
+const permalinkBtn = document.getElementById("permalink");
+permalinkBtn.addEventListener("click", () => {
+  const encoded = btoa(unescape(encodeURIComponent(inputEl.value)));
+  const url = location.origin + location.pathname + "#" + encoded;
+  history.replaceState(null, "", "#" + encoded);
+  navigator.clipboard.writeText(url).then(() => {
+    permalinkBtn.textContent = "Copied!";
+    permalinkBtn.classList.add("copied");
+    setTimeout(() => {
+      permalinkBtn.textContent = "Permalink";
+      permalinkBtn.classList.remove("copied");
+    }, 1500);
+  });
+});
+
+// Restore from URL hash on load
+if (location.hash.length > 1) {
+  try {
+    inputEl.value = decodeURIComponent(escape(atob(location.hash.slice(1))));
+  } catch (e) {}
+}
+
+// Initial render
+astEl.innerHTML = '<span class="loading">Loading...</span>';
+update();
+</script>
+
+</body>
+</html>
